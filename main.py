@@ -7,8 +7,18 @@ Thermal Butterfly Chart Generator
     薄いグレー | 濃いグレー | 白 | 濃いグレー | 薄いグレー
     許容範囲外   マージン領域  設計温度範囲  マージン領域   許容範囲外
 その上にカラーバーで経験温度範囲を描画する。
+
+Usage
+-----
+# すべての xlsx を対象
+uv run python3 main.py
+
+# ファイルを指定（拡張子あり・なし、複数指定可）
+uv run python3 main.py example_data
+uv run python3 main.py sun_MY_A hot_case_B
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -48,7 +58,6 @@ LIMITS_FILE = ANALYSIS_DIR / "allowable_limits.json"
 COLOR_OUTSIDE = "#C0C0C0"   # 許容温度範囲外（薄いグレー）
 COLOR_MARGIN = "#808080"    # マージン領域（濃いグレー）
 COLOR_DESIGN = "#FFFFFF"    # 設計温度範囲（白）
-COLOR_VIOLATION = "#FF4444" # 許容温度違反（赤）
 
 # ── レイアウト定数 ───────────────────────────────────────────────────────────
 BG_HEIGHT = 0.85     # 背景ゾーンバーの高さ
@@ -57,23 +66,47 @@ FIG_WIDTH = 14
 X_PADDING = 10.0     # 許容限界の外側に追加する余白 (°C)
 
 
-def load_analysis_data(analysis_dir: Path) -> dict[str, dict]:
+def load_analysis_data(
+    analysis_dir: Path,
+    targets: list[str] | None = None,
+) -> tuple[dict, list[str]]:
     """
     analysis_dir 内のすべての .xlsx を読み込み、各ノードの
     全ケースにわたる最高・最低温度を返す。
 
+    Parameters
+    ----------
+    analysis_dir : Path
+    targets : list of str, optional
+        xlsx ファイル名（拡張子あり・なし）のリスト。
+        None または空リストの場合は analysis_dir 内の全 xlsx を対象とする。
+
     Returns
     -------
-    dict: {node_name: {"t_min": float, "t_max": float, "cases": list[str]}}
+    (node_data, case_names)
+        node_data  : {node_name: {"t_min": float, "t_max": float, "cases": list[str]}}
+        case_names : list of xlsx file stems, in reading order
     """
     node_data: dict[str, dict] = {}
+    case_names: list[str] = []
 
-    excel_files = sorted(analysis_dir.glob("*.xlsx"))
+    if targets:
+        excel_files = []
+        for t in targets:
+            stem = Path(t).stem          # 拡張子があっても stem だけ取り出す
+            path = analysis_dir / f"{stem}.xlsx"
+            if not path.exists():
+                raise FileNotFoundError(f"File not found: {path}")
+            excel_files.append(path)
+    else:
+        excel_files = sorted(analysis_dir.glob("*.xlsx"))
+
     if not excel_files:
         raise FileNotFoundError(f"No .xlsx files found in {analysis_dir}")
 
     for xlsx in excel_files:
         case_name = xlsx.stem
+        case_names.append(case_name)
         df = pd.read_excel(xlsx, index_col=0)
 
         for col in df.columns:
@@ -88,7 +121,7 @@ def load_analysis_data(analysis_dir: Path) -> dict[str, dict]:
             node_data[col]["t_max"] = max(node_data[col]["t_max"], float(temps.max()))
             node_data[col]["cases"].append(case_name)
 
-    return node_data
+    return node_data, case_names
 
 
 def load_config(limits_file: Path) -> tuple[dict, float]:
@@ -119,6 +152,7 @@ def create_butterfly_chart(
     node_limits: dict,
     margin_deg_c: float,
     output_path: Path,
+    case_names: list[str] | None = None,
 ) -> None:
     """
     バタフライチャートを生成して output_path に保存する。
@@ -146,7 +180,7 @@ def create_butterfly_chart(
     cmap = plt.get_cmap("tab10")
 
     fig_height = max(4.0, n * 0.6 + 1.8)
-    fig, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height))
+    _, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height))
     ax.set_facecolor("white")
 
     y_labels = []
@@ -194,15 +228,9 @@ def create_butterfly_chart(
             )
 
         # ── Layer 4: 経験温度範囲バー（カラー）──────────────────────────────
-        # 許容限界外に出た場合は赤でクリップなしに描画
-        exp_low = min(t_min, t_max)
-        exp_high = max(t_min, t_max)
-        within_allowable = (exp_low >= allow_low) and (exp_high <= allow_high)
-        bar_color = exp_color if within_allowable else COLOR_VIOLATION
-
         ax.barh(
-            y, exp_high - exp_low, left=exp_low,
-            height=EXP_HEIGHT, color=bar_color, linewidth=0, zorder=4,
+            y, t_max - t_min, left=t_min,
+            height=EXP_HEIGHT, color=exp_color, linewidth=0, zorder=4,
         )
 
         # ── 許容温度限界の境界線 ──────────────────────────────────────────
@@ -220,22 +248,19 @@ def create_butterfly_chart(
     ax.invert_yaxis()
     ax.set_xlim(chart_left, chart_right)
     ax.set_xlabel("Temperature (°C)", fontsize=11)
+    title_name = ", ".join(case_names) if case_names else "Thermal Butterfly Chart"
     ax.set_title(
-        f"Thermal Butterfly Chart  [margin: ±{margin_deg_c:.0f}°C]",
+        f"{title_name}  [margin: ±{margin_deg_c:.0f}°C]",
         fontsize=13, pad=10,
     )
     ax.grid(True, axis="x", linestyle="--", alpha=0.35, zorder=0)
 
-    # ── 凡例 ─────────────────────────────────────────────────────────────
+    # ── Legend ───────────────────────────────────────────────────────────
     legend_handles = [
         mpatches.Patch(facecolor=COLOR_OUTSIDE, edgecolor="gray",
-                       label="許容温度範囲外 (Outside Allowable)"),
+                       label="Outside Allowable"),
         mpatches.Patch(facecolor=COLOR_MARGIN, edgecolor="gray",
-                       label=f"マージン領域 ±{margin_deg_c:.0f}°C (Margin Zone)"),
-        mpatches.Patch(facecolor=COLOR_DESIGN, edgecolor="black",
-                       label="設計温度範囲 (Design Range)"),
-        mpatches.Patch(facecolor=cmap(0), label="経験温度範囲 (Experienced)"),
-        mpatches.Patch(facecolor=COLOR_VIOLATION, label="許容温度違反 (Violation)"),
+                       label=f"Margin Zone (±{margin_deg_c:.0f}°C)"),
     ]
     ax.legend(
         handles=legend_handles,
@@ -252,16 +277,31 @@ def create_butterfly_chart(
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Generate a thermal butterfly chart from transient analysis xlsx files.",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        metavar="FILE",
+        help=(
+            "xlsx file name(s) to include (with or without .xlsx extension). "
+            "If omitted, all xlsx files in analysis_results/ are used."
+        ),
+    )
+    args = parser.parse_args()
+
     print("Loading analysis data ...")
-    node_data = load_analysis_data(ANALYSIS_DIR)
+    node_data, case_names = load_analysis_data(ANALYSIS_DIR, args.files or None)
     print(f"  Found {len(node_data)} node(s): {list(node_data.keys())}")
+    print(f"  Cases: {case_names}")
 
     node_limits, margin_deg_c = load_config(LIMITS_FILE)
     print(f"  Loaded limits for {len(node_limits)} node(s), margin = {margin_deg_c}°C")
 
     output_path = OUTPUT_DIR / "butterfly_chart.png"
     print("Creating butterfly chart ...")
-    create_butterfly_chart(node_data, node_limits, margin_deg_c, output_path)
+    create_butterfly_chart(node_data, node_limits, margin_deg_c, output_path, case_names)
     print("Done.")
 
 
