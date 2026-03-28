@@ -12,7 +12,7 @@
               ↑                              ↑
            許容下限                        許容上限
                ↑                          ↑
-            設計下限                    設計高限
+            設計下限                    設計上限
             (allow_low + margin)    (allow_high − margin)
 ```
 
