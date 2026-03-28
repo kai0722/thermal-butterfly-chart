@@ -249,10 +249,7 @@ def create_butterfly_chart(
     ax.set_xlim(chart_left, chart_right)
     ax.set_xlabel("Temperature (°C)", fontsize=11)
     title_name = ", ".join(case_names) if case_names else "Thermal Butterfly Chart"
-    ax.set_title(
-        f"{title_name}  [margin: ±{margin_deg_c:.0f}°C]",
-        fontsize=13, pad=10,
-    )
+    ax.set_title(title_name, fontsize=13, pad=10)
     ax.grid(True, axis="x", linestyle="--", alpha=0.35, zorder=0)
 
     # ── Legend ───────────────────────────────────────────────────────────
@@ -260,7 +257,7 @@ def create_butterfly_chart(
         mpatches.Patch(facecolor=COLOR_OUTSIDE, edgecolor="gray",
                        label="Outside Allowable"),
         mpatches.Patch(facecolor=COLOR_MARGIN, edgecolor="gray",
-                       label=f"Margin Zone (±{margin_deg_c:.0f}°C)"),
+                       label="Margin Zone"),
     ]
     ax.legend(
         handles=legend_handles,
@@ -298,6 +295,13 @@ def main():
 
     node_limits, margin_deg_c = load_config(LIMITS_FILE)
     print(f"  Loaded limits for {len(node_limits)} node(s), margin = {margin_deg_c}°C")
+
+    # allowable_limits.json に定義されているノードのみを対象とする
+    node_data = {k: v for k, v in node_data.items() if k in node_limits}
+    print(f"  Nodes to plot: {list(node_data.keys())}")
+
+    if not node_data:
+        raise ValueError("No nodes to plot. Check that node names in xlsx match allowable_limits.json.")
 
     output_path = OUTPUT_DIR / "butterfly_chart.png"
     print("Creating butterfly chart ...")
